@@ -1,6 +1,7 @@
 # 🐧 CyberPatriot Linux Security Checklist (Claude)
 
-> A comprehensive security hardening checklist for CyberPatriot competitions on Linux systems (Ubuntu/Debian focus). Items are ordered from highest to lowest point value.
+> A comprehensive security hardening checklist for CyberPatriot competitions on Linux systems. Items are ordered from highest to lowest point value.
+> Consider using gedit in place of nano for a smoother text interface
 
 ## ⚠️ CRITICAL FIRST STEPS
 
@@ -46,7 +47,7 @@ cat /etc/passwd | grep <username>
 - Remove any users not explicitly authorized
 - Check both `/etc/passwd` and `/home/` directories
 
-#### Check and Remove Unauthorized Sudoers
+#### Check and Remove Unauthorized Sudoers (do this in terminal or just settings)
 ```bash
 # List all users with sudo privileges
 getent group sudo
@@ -216,7 +217,7 @@ sudo apt-get autoclean
 **Instructions:**
 - Run updates early - they can take 10-30+ minutes
 - Usually worth significant points
-- ⚠️ **RISKY**: May require system restart
+- ⚠️ **RISKY**: May require system restart or take about a billion years
 - Check for kernel updates: `uname -r` then reboot if kernel was updated
 
 #### Enable Automatic Security Updates
