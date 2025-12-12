@@ -1,915 +1,607 @@
-# 🐧 CyberPatriot Linux Security Checklist (Claude)
+🎯 CyberPatriot Checklist (Prioritized)
+⚠️ CRITICAL FIRST STEPS
 
-> A comprehensive security hardening checklist for CyberPatriot competitions on Linux systems. Items are ordered from highest to lowest point value.
-> Consider using gedit in place of nano for a smoother text interface
+Complete before anything else to avoid breaking the system or losing points:
 
-## ⚠️ CRITICAL FIRST STEPS
+Read the README thoroughly – essential for knowing required services and authorized users.
 
-**DO THESE BEFORE ANYTHING ELSE:**
+Answer all forensics questions before making system changes.
 
-1. 📖 **Read the README thoroughly** - Contains critical information about required services and authorized users
-2. 🔍 **Answer all forensics questions** - Complete BEFORE making system changes
-3. 💾 **Take a VM snapshot** - Create a restore point in case something breaks
-4. 📝 **Document authorized users and admins** - Write down who should have access according to README
+Take a VM snapshot – create a restore point.
 
----
+Document authorized users and admins – based on README.
 
-## 🎯 High Priority Items (Most Points)
+🛠️ High Priority Items (Most Points)
+1️⃣ User Account Management
 
-### 1️⃣ User Account Management
+List All Users:
 
-#### List All Users
-```bash
-# View all users
-cat /etc/passwd
+cat /etc/passwd  # View all users
+awk -F: '$3 >= 1000 {print $1}' /etc/passwd  # View only regular users (UID >= 1000)
 
-# View only regular users (UID >= 1000)
-awk -F: '$3 >= 1000 {print $1}' /etc/passwd
 
-# View all users with home directories
-ls /home/
-```
+This command helps verify which accounts are in the system and what their UID is.
 
-#### Remove Unauthorized Users
-```bash
-# Delete user and their home directory
-sudo userdel -r <username>
+Remove Unauthorized Users:
 
-# Delete user but keep home directory (if needed for forensics)
-sudo userdel <username>
+sudo userdel -r <username>  # Remove user and their home directory
+sudo userdel <username>  # Remove user but keep home directory (for forensics)
 
-# Verify user was removed
+
+Verify the user has been deleted by checking /etc/passwd:
+
 cat /etc/passwd | grep <username>
-```
 
-**Instructions:**
-- Compare against README authorized users list
-- Remove any users not explicitly authorized
-- Check both `/etc/passwd` and `/home/` directories
 
-#### Check and Remove Unauthorized Sudoers (do this in terminal or just settings)
-```bash
-# List all users with sudo privileges
-getent group sudo
-getent group admin # Ubuntu also uses admin group
+Remove Unauthorized Sudoers:
 
-# View sudoers file (DO NOT EDIT DIRECTLY)
-sudo visudo -c # Check syntax
-sudo cat /etc/sudoers
-```
+getent group sudo  # List users with sudo access
+sudo visudo -c  # Check sudoers syntax
+sudo cat /etc/sudoers  # View sudoers file
+sudo deluser <username> sudo  # Remove from sudo group
 
-Remove from sudo group:
-```bash
-# Remove user from sudo group
-sudo deluser <username> sudo
-sudo deluser <username> admin
 
-# Verify removal
-groups <username>
-```
+Add Authorized Users:
 
-**Check for additional sudo access:**
-```bash
-# Check sudoers.d directory for per-user files
-ls -la /etc/sudoers.d/
-sudo cat /etc/sudoers.d/*
+sudo adduser <username>  # Create a new user
+sudo usermod -aG sudo <username>  # Add to sudo group if authorized
 
-# Remove unauthorized sudoers files
-sudo rm /etc/sudoers.d/<filename>
-```
 
-⚠️ **VERY RISKY**: Never remove your own user from sudo or you'll lose admin access!
+Lock Root Account (Best Practice):
 
-#### Add Missing Authorized Users
-```bash
-# Create new user (interactive - sets password, creates home dir)
-sudo adduser <username>
-
-# Add to sudo group if authorized as admin
-sudo usermod -aG sudo <username>
-
-# Verify user was created
-id <username>
-```
-
-#### Disable/Lock Unnecessary Accounts
-```bash
-# Lock the root account (best practice)
 sudo passwd -l root
 
-# Disable guest login (Ubuntu with LightDM)
+
+Disable Guest Login (for Ubuntu with LightDM):
+
 sudo sh -c 'printf "[Seat:*]\nallow-guest=false\n" > /etc/lightdm/lightdm.conf.d/50-no-guest.conf'
 
-# Check for and disable other system accounts with shells
-awk -F: '($3 < 1000) && ($7 != "/usr/sbin/nologin") && ($7 != "/bin/false") {print $1}' /etc/passwd
-```
+2️⃣ Password Policies
 
-#### Check for Unauthorized UID 0 Accounts
-```bash
-# Only root should have UID 0
-awk -F: '($3 == 0) {print $1}' /etc/passwd
-```
-- If any user besides `root` has UID 0, that's a backdoor!
-- Remove that account immediately
+Install PAM Password Quality Library:
 
-#### Secure User Home Directories
-```bash
-# Check home directory permissions
-ls -la /home/
-
-# Fix permissions (owner only)
-sudo chmod 750 /home/<username>
-sudo chown <username>:<username> /home/<username>
-```
-
----
-
-### 2️⃣ Password Policies
-
-#### Install Password Quality Library
-```bash
-# Install PAM password quality module
-sudo apt-get update
 sudo apt-get install libpam-pwquality -y
-```
 
-#### Configure Password Complexity Requirements
-```bash
-# Edit PAM password configuration
-sudo nano /etc/pam.d/common-password
-```
 
-Find the line with `pam_pwquality.so` or `pam_unix.so` and modify/add:
-```
+Configure Password Complexity:
+Edit /etc/pam.d/common-password and modify:
+
 password requisite pam_pwquality.so retry=3 minlen=8 difok=3 ucredit=-1 lcredit=-1 dcredit=-1 ocredit=-1 maxrepeat=2
-```
 
-**Parameters explained:**
-- `retry=3` - Allow 3 attempts to set password
-- `minlen=8` - Minimum 8 characters
-- `difok=3` - At least 3 characters different from old password
-- `ucredit=-1` - Require at least 1 uppercase letter
-- `lcredit=-1` - Require at least 1 lowercase letter
-- `dcredit=-1` - Require at least 1 digit
-- `ocredit=-1` - Require at least 1 special character
-- `maxrepeat=2` - No more than 2 repeated characters
 
-#### Configure Password Aging
-```bash
-# Edit login definitions
-sudo nano /etc/login.defs
-```
+retry=3: Allow 3 attempts for a valid password.
 
-Set these values:
-```
+minlen=8: Minimum length of 8 characters.
+
+difok=3: At least 3 characters different from the old password.
+
+ucredit=-1: At least 1 uppercase letter.
+
+lcredit=-1: At least 1 lowercase letter.
+
+dcredit=-1: At least 1 digit.
+
+ocredit=-1: At least 1 special character.
+
+maxrepeat=2: No more than 2 repeated characters.
+
+Configure Password Aging:
+Edit /etc/login.defs:
+
 PASS_MAX_DAYS 90
-PASS_MIN_DAYS 1
+PASS_MIN_DAYS 10
 PASS_WARN_AGE 7
-PASS_MIN_LEN 8
-```
 
-**Apply to existing users:**
-```bash
-# Apply password aging to all regular users
-for user in $(awk -F: '$3 >= 1000 {print $1}' /etc/passwd); do
-    sudo chage -M 90 -m 1 -W 7 "$user"
-    echo "Updated password policy for $user"
-done
 
-# Check a specific user's password policy
-sudo chage -l <username>
-```
+Force Password Change:
 
-#### Force Password Changes on Next Login (if needed)
-```bash
-# Force user to change password on next login
 sudo passwd -e <username>
-```
 
-#### Set Strong Passwords for All Users
-```bash
-# Change password for a user
-sudo passwd <username>
-```
-- Make sure all user passwords meet complexity requirements
-- Don't use default passwords like "password123" or "cyberpatriot"
 
----
+Change Weak Passwords:
 
-### 3️⃣ System Updates and Patches
+sudo passwd <username>  # Set a strong, secure password
 
-#### Update Package Lists and Upgrade All Packages
-```bash
-# Update package repository lists
-sudo apt-get update
+3️⃣ System Updates and Patches
 
-# Upgrade all installed packages
-sudo apt-get upgrade -y
+Update System Packages:
 
-# Full distribution upgrade (more aggressive)
-sudo apt-get dist-upgrade -y
-
-# Remove unnecessary packages
+sudo apt-get update && sudo apt-get upgrade -y
+sudo apt-get dist-upgrade -y  # For full distribution upgrades
 sudo apt-get autoremove -y
 sudo apt-get autoclean
-```
 
-**Instructions:**
-- Run updates early - they can take 10-30+ minutes
-- Usually worth significant points
-- ⚠️ **RISKY**: May require system restart or take about a billion years
-- Check for kernel updates: `uname -r` then reboot if kernel was updated
 
-#### Enable Automatic Security Updates
-```bash
-# Install unattended-upgrades
-sudo apt-get install unattended-upgrades -y
+Note: Run updates as early as possible to secure the system.
 
-# Configure automatic updates
-sudo dpkg-reconfigure -plow unattended-upgrades
-# Select "Yes" when prompted
+Check for Kernel Updates:
 
-# Verify it's enabled
-sudo systemctl status unattended-upgrades
-```
+uname -r  # Check current kernel version
 
-#### Check for Available Updates
-```bash
-# Check what updates are available
-apt list --upgradable
+4️⃣ Firewall Configuration
 
-# Check for security updates specifically
-sudo unattended-upgrade --dry-run -d
-```
+Install and Enable UFW (Uncomplicated Firewall):
 
----
-
-### 4️⃣ Firewall Configuration
-
-#### Install and Enable UFW (Uncomplicated Firewall)
-```bash
-# Install UFW (usually pre-installed on Ubuntu)
 sudo apt-get install ufw -y
+sudo ufw default deny incoming  # Block incoming connections
+sudo ufw default allow outgoing  # Allow outgoing connections
+sudo ufw enable  # Enable UFW
+sudo ufw status verbose  # Check UFW status
 
-# Set default policies
-sudo ufw default deny incoming
-sudo ufw default allow outgoing
 
-# Enable UFW
-sudo ufw enable
+Allow Required Services:
 
-# Check status
-sudo ufw status verbose
-```
+sudo ufw allow ssh  # Allow SSH
+sudo ufw allow 80/tcp  # Allow HTTP
+sudo ufw allow 443/tcp  # Allow HTTPS
 
-**Warning:** The system will prompt that this may disrupt SSH connections. If you're doing this remotely, allow SSH first!
 
-#### Allow Required Services
-```bash
-# Allow SSH (do this BEFORE enabling firewall if accessing remotely!)
-sudo ufw allow ssh
-# Or specific port: sudo ufw allow 22/tcp
+Enable Firewall Logging:
 
-# Allow other services as needed per README
-sudo ufw allow 80/tcp # HTTP
-sudo ufw allow 443/tcp # HTTPS
-sudo ufw allow 21/tcp # FTP (only if required)
-sudo ufw allow 3306/tcp # MySQL (only if required)
-
-# Allow service by name
-sudo ufw allow apache
-sudo ufw allow nginx
-```
-
-#### Review and Remove Unnecessary Firewall Rules
-```bash
-# List all rules with numbers
-sudo ufw status numbered
-
-# Delete a rule by number
-sudo ufw delete <number>
-```
-
-#### Enable Logging
-```bash
-# Enable firewall logging
 sudo ufw logging on
 sudo ufw logging medium
-```
 
----
+5️⃣ Remove Prohibited Software
 
-### 5️⃣ Remove Prohibited Software
+List Installed Packages:
 
-#### List Installed Packages
-```bash
-# List all installed packages
 dpkg -l
 
-# Search for specific software
-dpkg -l | grep -i <software_name>
 
-# Or use apt
-apt list --installed | grep -i <software_name>
-```
+Remove Unauthorized or Prohibited Software:
 
-#### Common Prohibited Software to Remove
-
-**Hacking/Pentesting Tools:**
-```bash
-# Network analyzers
-sudo apt-get purge wireshark wireshark-* -y
-
-# Port scanners
-sudo apt-get purge nmap zenmap -y
-
-# Password crackers
-sudo apt-get purge john john-data ophcrack -y
-sudo apt-get purge hydra hydra-gtk -y
-
-# Other pentesting tools
-sudo apt-get purge metasploit* -y
-sudo apt-get purge aircrack-ng -y
-sudo apt-get purge netcat netcat-* nc -y
-sudo apt-get purge nikto -y
-sudo apt-get purge sqlmap -y
-
-# Sniffers
-sudo apt-get purge tcpdump -y
-sudo apt-get purge ettercap* -y
-```
-
-**Games:**
-```bash
-# Remove game packages
-sudo apt-get purge gnome-games -y
-sudo apt-get purge kde-games -y
-sudo apt-get purge aisleriot -y
-sudo apt-get purge gnome-mahjongg -y
-sudo apt-get purge gnome-mines -y
-sudo apt-get purge gnome-sudoku -y
-```
-
-**P2P/Torrent Software:**
-```bash
-sudo apt-get purge transmission transmission-* -y
-sudo apt-get purge deluge deluge-* -y
-sudo apt-get purge frostwire -y
-sudo apt-get purge vuze -y
-```
-
-**Unauthorized Remote Access:**
-```bash
-# Only remove if not required by README!
-sudo apt-get purge teamviewer -y
-sudo apt-get purge anydesk -y
-sudo apt-get purge tightvncserver -y
-sudo apt-get purge vnc4server -y
-```
-
-**Clean up after removal:**
-```bash
-sudo apt-get autoremove -y
+sudo apt-get purge <package_name> -y
+sudo apt-get autoremove -y  # Clean up after removal
 sudo apt-get autoclean
-```
 
-#### Find and Remove Prohibited Media Files
-```bash
-# Find audio files
-sudo find /home -name "*.mp3" 2>/dev/null
-sudo find /home -name "*.wav" 2>/dev/null
-sudo find /home -name "*.flac" 2>/dev/null
 
-# Find video files
-sudo find /home -name "*.mp4" 2>/dev/null
-sudo find /home -name "*.avi" 2>/dev/null
-sudo find /home -name "*.mkv" 2>/dev/null
-sudo find /home -name "*.mov" 2>/dev/null
+Commonly prohibited software:
 
-# Find image files (be careful - some may be legitimate)
-sudo find /home -name "*.jpg" 2>/dev/null
-sudo find /home -name "*.png" 2>/dev/null
+Network Analyzers: Wireshark, tcpdump
 
-# Delete a file
-sudo rm /path/to/file
+Pentesting Tools: Nmap, metasploit
 
-# Or delete multiple files of same type
-sudo find /home -name "*.mp3" -type f -delete
-```
+Remote Access Tools: TeamViewer, AnyDesk
 
-⚠️ **Be careful:** Some media files may be legitimate or required! Check README first.
+6️⃣ Service Management
 
----
+List All Running Services:
 
-### 6️⃣ Service Management
-
-#### List All Running Services
-```bash
-# List all services (systemd)
 sudo systemctl list-units --type=service --state=running
-
-# List all services (including inactive)
 sudo systemctl list-units --type=service --all
 
-# Check specific service status
-sudo systemctl status <service_name>
-```
 
-#### Disable and Stop Unnecessary Services
+Disable Unnecessary Services:
 
-**Common Services to Disable (unless required by README):**
-
-```bash
-# Telnet (VERY insecure - almost always disable)
 sudo systemctl stop telnet.socket
 sudo systemctl disable telnet.socket
-
-# FTP (insecure - disable unless required)
-sudo systemctl stop vsftpd
-sudo systemctl disable vsftpd
-
-# Apache/nginx (disable if not web server)
-sudo systemctl stop apache2
+sudo systemctl stop apache2  # If not required
 sudo systemctl disable apache2
-sudo systemctl stop nginx
-sudo systemctl disable nginx
 
-# MySQL/PostgreSQL (disable if not database server)
-sudo systemctl stop mysql
-sudo systemctl disable mysql
-sudo systemctl stop postgresql
-sudo systemctl disable postgresql
 
-# Samba (Windows file sharing - disable unless required)
-sudo systemctl stop smbd
-sudo systemctl disable smbd
-sudo systemctl stop nmbd
-sudo systemctl disable nmbd
+Verify Service Stopped:
 
-# NFS (disable unless required)
-sudo systemctl stop nfs-server
-sudo systemctl disable nfs-server
-
-# SNMP (can leak information)
-sudo systemctl stop snmpd
-sudo systemctl disable snmpd
-
-# Print services (disable if not print server)
-sudo systemctl stop cups
-sudo systemctl disable cups
-
-# Bluetooth (disable if not needed)
-sudo systemctl stop bluetooth
-sudo systemctl disable bluetooth
-
-# Avahi (zeroconf/mDNS - potential info leak)
-sudo systemctl stop avahi-daemon
-sudo systemctl disable avahi-daemon
-```
-
-**Verify service is stopped:**
-```bash
 sudo systemctl status <service_name>
-```
 
-⚠️ **VERY RISKY**: Disabling wrong services can break required functionality and cost points!
 
-**Services to NEVER disable:**
-- `ssh` / `sshd` (if you need remote access)
-- `networking` / `NetworkManager`
-- `systemd-*` services
-- `dbus`
-- Services required by README
+Ensure Required Services Stay Running:
 
-#### Secure SSH (If Required)
-```bash
-# Edit SSH configuration
-sudo nano /etc/ssh/sshd_config
-```
+ssh, networking, dbus, and other critical services should not be disabled unless specified in the README.
 
-**Recommended SSH hardening:**
-```bash
-# Disable root login
-PermitRootLogin no
+7️⃣ Network Security
 
-# Disable password authentication (use keys only - RISKY for competition!)
-# PasswordAuthentication no # Usually keep this as 'yes' for competition
+Disable IPv6 (if not needed):
+Edit /etc/sysctl.conf:
 
-# Disable empty passwords
-PermitEmptyPasswords no
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
 
-# Limit authentication attempts
-MaxAuthTries 3
 
-# Set login grace time
-LoginGraceTime 60
+Apply changes:
 
-# Disable X11 forwarding (unless needed)
-X11Forwarding no
+sudo sysctl -p
 
-# Only allow specific users (optional)
-AllowUsers <user1> <user2>
 
-# Use protocol 2 only (should be default)
-Protocol 2
+Configure Network Security Parameters:
+Edit /etc/sysctl.conf to harden networking:
 
-# Change default port (advanced)
-# Port 2222
-```
+net.ipv4.ip_forward = 0
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
 
-**Restart SSH after changes:**
-```bash
-sudo systemctl restart sshd
-# Or
-sudo service ssh restart
-```
+8️⃣ Audit and Logging
 
-⚠️ **VERY RISKY**: Test SSH access before logging out! Wrong config can lock you out.
+Install and Configure Auditd:
 
----
+sudo apt-get install auditd audispd-plugins -y
+sudo systemctl enable auditd
+sudo systemctl start auditd
 
-## 🎯 Medium Priority Items (Good Points)
 
-### 7️⃣ File Permissions and Security
+Configure Audit Rules:
+Edit /etc/audit/rules.d/audit.rules to monitor critical files:
 
-#### Find World-Writable Files
-```bash
-# Find world-writable files (excluding /proc, /sys)
-sudo find / -path /proc -prune -o -path /sys -prune -o -type f -perm -002 -ls 2>/dev/null
+-w /etc/passwd -p wa -k passwd_changes
+-w /etc/group -p wa -k group_changes
+-w /etc/shadow -p wa -k shadow_changes
 
-# Fix world-writable files (be careful!)
-sudo chmod o-w /path/to/file
-```
+🎯 Medium Priority Items (Good Points)
+9️⃣ File Permissions and Security
 
-#### Find Files with No Owner
-```bash
-# Find files with no user owner
-sudo find / -nouser -ls 2>/dev/null
+Find World-Writable Files:
 
-# Find files with no group owner
-sudo find / -nogroup -ls 2>/dev/null
-```
+sudo find / -type f -perm -002 -ls 2>/dev/null
+sudo chmod o-w /path/to/file  # Remove world-writable permissions
 
-#### Secure Sensitive Files
-```bash
-# Secure /etc/passwd and /etc/shadow
+
+Secure Sensitive Files:
+
 sudo chmod 644 /etc/passwd
 sudo chmod 640 /etc/shadow
 sudo chown root:root /etc/passwd
 sudo chown root:shadow /etc/shadow
 
-# Secure /etc/group and /etc/gshadow
-sudo chmod 644 /etc/group
-sudo chmod 640 /etc/gshadow
 
-# Secure SSH keys
-sudo chmod 600 ~/.ssh/id_rsa
-sudo chmod 644 ~/.ssh/id_rsa.pub
-sudo chmod 700 ~/.ssh
-```
+Check for SUID/SGID Binaries:
 
-#### Find and Remove SUID/SGID Binaries
-```bash
-# Find SUID files (execute as file owner)
 sudo find / -perm -4000 -type f -ls 2>/dev/null
-
-# Find SGID files (execute as file group)
 sudo find / -perm -2000 -type f -ls 2>/dev/null
 
-# Remove SUID/SGID bit if not needed (be VERY careful!)
-sudo chmod u-s /path/to/file # Remove SUID
-sudo chmod g-s /path/to/file # Remove SGID
-```
+🔟 Additional Security Measures
 
-⚠️ **VERY RISKY**: Some programs require SUID to function (sudo, passwd, etc.)
+Configure AppArmor (if necessary):
 
-**Common legitimate SUID files:**
-- `/usr/bin/sudo`
-- `/usr/bin/passwd`
-- `/usr/bin/su`
-- `/usr/bin/mount`
-- `/usr/bin/umount`
-
-#### Check Cron Jobs for Malicious Tasks
-```bash
-# View system cron jobs
-ls -la /etc/cron.*
-cat /etc/crontab
-
-# View user cron jobs
-sudo crontab -l -u <username>
-
-# Check for all users
-for user in $(cut -f1 -d: /etc/passwd); do 
-    echo "=== $user crontab ===" 
-    sudo crontab -u $user -l 2>/dev/null
-done
-```
-
-**Remove suspicious cron jobs:**
-```bash
-# Edit crontab for user
-sudo crontab -e -u <username>
-
-# Delete cron job file
-sudo rm /etc/cron.d/<suspicious_file>
-```
-
----
-
-### 8️⃣ Network Security
-
-#### Disable IPv6 (If Not Needed)
-```bash
-# Edit sysctl config
-sudo nano /etc/sysctl.conf
-```
-
-Add these lines:
-```
-net.ipv6.conf.all.disable_ipv6 = 1
-net.ipv6.conf.default.disable_ipv6 = 1
-net.ipv6.conf.lo.disable_ipv6 = 1
-```
-
-Apply changes:
-```bash
-sudo sysctl -p
-```
-
-#### Configure Network Security Parameters
-```bash
-# Edit sysctl config
-sudo nano /etc/sysctl.conf
-```
-
-Add/modify these lines:
-```bash
-# IP Forwarding (disable unless router)
-net.ipv4.ip_forward = 0
-
-# Disable source packet routing
-net.ipv4.conf.all.accept_source_route = 0
-net.ipv4.conf.default.accept_source_route = 0
-
-# Disable ICMP redirect acceptance
-net.ipv4.conf.all.accept_redirects = 0
-net.ipv4.conf.default.accept_redirects = 0
-
-# Disable secure ICMP redirect acceptance
-net.ipv4.conf.all.secure_redirects = 0
-
-# Enable bad error message protection
-net.ipv4.icmp_echo_ignore_broadcasts = 1
-net.ipv4.icmp_ignore_bogus_error_responses = 1
-
-# Enable TCP SYN cookies (DDoS protection)
-net.ipv4.tcp_syncookies = 1
-
-# Log suspicious packets
-net.ipv4.conf.all.log_martians = 1
-
-# Ignore ICMP ping requests (optional)
-# net.ipv4.icmp_echo_ignore_all = 1
-```
-
-Apply changes:
-```bash
-sudo sysctl -p
-```
-
-#### Check for Listening Ports
-```bash
-# Show all listening ports
-sudo netstat -tulpn
-
-# Or with ss (newer)
-sudo ss -tulpn
-
-# Check for specific port
-sudo lsof -i :PORT_NUMBER
-```
-
-**Investigate suspicious listening ports:**
-- Unexpected high ports
-- Services you don't recognize
-- Connections to unknown IPs
-
----
-
-### 9️⃣ Audit and Logging
-
-#### Install and Configure Auditd
-```bash
-# Install audit daemon
-sudo apt-get install auditd audispd-plugins -y
-
-# Enable and start auditd
-sudo systemctl enable auditd
-sudo systemctl start auditd
-
-# Check status
-sudo systemctl status auditd
-```
-
-#### Configure Audit Rules
-```bash
-# View current rules
-sudo auditctl -l
-
-# Edit audit rules
-sudo nano /etc/audit/rules.d/audit.rules
-```
-
-**Add basic audit rules:**
-```bash
-# Monitor changes to passwd file
--w /etc/passwd -p wa -k passwd_changes
-
-# Monitor changes to group file
--w /etc/group -p wa -k group_changes
-
-# Monitor changes to shadow file
--w /etc/shadow -p wa -k shadow_changes
-
-# Monitor sudo usage
--w /etc/sudoers -p wa -k sudoers_changes
--w /var/log/sudo.log -p wa -k sudo_log
-
-# Monitor SSH configuration
--w /etc/ssh/sshd_config -p wa -k sshd_config_changes
-
-# Monitor login/logout events
--w /var/log/lastlog -p wa -k lastlog_changes
--w /var/run/faillock/ -p wa -k faillock_changes
-```
-
-Reload rules:
-```bash
-sudo augenrules --load
-sudo systemctl restart auditd
-```
-
-#### Configure Rsyslog
-```bash
-# Install rsyslog (usually pre-installed)
-sudo apt-get install rsyslog -y
-
-# Enable and start
-sudo systemctl enable rsyslog
-sudo systemctl start rsyslog
-
-# Check logs
-sudo tail -f /var/log/syslog
-sudo tail -f /var/log/auth.log
-```
-
----
-
-### 🔟 Additional Security Measures
-
-#### Install and Configure AppArmor
-```bash
-# Install AppArmor (usually pre-installed on Ubuntu)
 sudo apt-get install apparmor apparmor-utils -y
-
-# Check AppArmor status
-sudo aa-status
-
-# Enable AppArmor
 sudo systemctl enable apparmor
 sudo systemctl start apparmor
 
-# Put profiles in enforce mode
-sudo aa-enforce /etc/apparmor.d/*
-```
 
-#### Remove Compilers (If Not Needed)
-```bash
-# Check if compilers are installed
-which gcc
-which g++
-which cc
+Check for Rootkits (use rkhunter):
 
-# Remove compilers (only if README doesn't require them!)
-sudo apt-get purge gcc g++ make -y
-```
+sudo apt-get install rkhunter -y
+sudo rkhunter --update
+sudo rkhunter --check --skip
 
-⚠️ **RISKY**: May break dependencies or required functionality!
+You said:
+Oops, forgot to mention that you should format it as a github readme
+ChatGPT said:
 
-#### Configure Banners and Login Messages
-```bash
-# Edit pre-login banner
-sudo nano /etc/issue.net
-```
+Got you — here is a fully formatted, cleaned-up, clarified, professionally structured GitHub-style README for your CyberPatriot Linux (Ubuntu 24.04 + Mint 21) Checklist.
 
-Add warning message:
-```
-***************************************************************************
-                            NOTICE TO USERS
+Everything is prioritized from most points → least points, unnecessary duplication has been removed, risky items are labeled, and all steps have explanations.
 
-This computer system is for authorized use only. Unauthorized access is
-prohibited and may be subject to criminal prosecution.
-***************************************************************************
-```
+You can paste this directly into a GitHub README.md.
 
-```bash
-# Edit post-login message
-sudo nano /etc/motd
-```
+🛡️ CyberPatriot Linux Checklist (Ubuntu 24.04 & Linux Mint 21)
 
-#### Disable USB Storage (Optional, Advanced)
-```bash
-# Prevent USB storage devices from being used
-sudo nano /etc/modprobe.d/usb-storage.conf
-```
+Optimized | Clarified | Prioritized | Competition-Safe
+
+This guide is designed for CyberPatriot Ubuntu 24 & Linux Mint 21 images.
+It contains everything needed to earn maximum points in proper priority order, with explanations and safe-to-use commands.
+
+⚠️ CRITICAL: DO THESE FIRST
+
+These steps protect you from losing points or breaking the VM.
+
+1️⃣ Read Everything First
+
+Before touching the machine:
+
+Read the README
+Contains required services, allowed software, and authorized users.
+
+Answer all forensics questions
+Many forensics rely on an unmodified machine.
+
+Take a VM snapshot
+If you break SSH, sudo, bootloader, or a service → you lose points.
+
+🎯 HIGH-PRIORITY TASKS (MOST POINTS)
+2️⃣ User Account Management (HUGE POINT VALUE)
+
+Most point losses come from unauthorized users or incorrect permissions.
+
+✔️ List All Users
+cat /etc/passwd
+awk -F: '$3 >= 1000 {print $1}' /etc/passwd
+ls /home/
+
+✔️ Delete Unauthorized Users
+sudo userdel -r <username>
+sudo userdel <username>       # Keep home directory for forensics
+
+✔️ Remove Unauthorized Admins
+getent group sudo
+getent group admin
+
+sudo deluser <username> sudo
+sudo deluser <username> admin
+
+
+Check for hidden sudoers rules:
+
+ls -la /etc/sudoers.d/
+sudo cat /etc/sudoers.d/*
+
+
+Remove unknown entries:
+
+sudo rm /etc/sudoers.d/<file>
+
+✔️ Add Missing Users
+sudo adduser <username>
+sudo usermod -aG sudo <username>   # Only if authorized
+
+✔️ Lock Root Account
+sudo passwd -l root
+
+✔️ Disable Guest Login
+
+(Ubuntu with LightDM only)
+
+sudo sh -c 'printf "[Seat:*]\nallow-guest=false\n" > /etc/lightdm/lightdm.conf.d/50-no-guest.conf'
+
+3️⃣ Password Policies (HIGH POINTS)
+
+Strengthens authentication security — always worth lots of points.
+
+✔️ Install password-quality library
+sudo apt install libpam-pwquality -y
+
+✔️ Configure strong password requirements
+
+Edit:
+
+sudo nano /etc/pam.d/common-password
+
+
+Add/modify this line:
+
+password requisite pam_pwquality.so retry=3 minlen=8 difok=3 \
+ucredit=-1 lcredit=-1 dcredit=-1 ocredit=-1 maxrepeat=2
+
+
+Explanation:
+
+minlen=8 → Minimum length
+
+ucredit=-1 → Require 1 uppercase
+
+dcredit=-1 → Require 1 digit
+
+etc.
+
+✔️ Configure password aging
+
+Edit:
+
+sudo nano /etc/login.defs
+
+
+Set:
+
+PASS_MAX_DAYS 90
+PASS_MIN_DAYS 10
+PASS_WARN_AGE 7
+PASS_MIN_LEN 8
+
+
+Apply to existing users:
+
+for user in $(awk -F: '$3 >= 1000 {print $1}' /etc/passwd); do
+  sudo chage -M 90 -m 10 -W 7 "$user"
+done
+
+✔️ Force password changes if necessary
+sudo passwd -e <username>
+
+4️⃣ System Updates & Patching (HIGH POINTS)
+✔️ Update everything
+sudo apt update
+sudo apt upgrade -y
+sudo apt dist-upgrade -y
+sudo apt autoremove -y
+sudo apt autoclean
+
+
+Kernel changed? → REBOOT
+
+✔️ Enable automatic security updates
+sudo apt install unattended-upgrades -y
+sudo dpkg-reconfigure -plow unattended-upgrades
+
+5️⃣ Firewall Configuration (Always Points)
+
+UFW is simple and heavily weighted.
+
+✔️ Install UFW
+sudo apt install ufw -y
+
+✔️ Apply default rules
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw enable
+sudo ufw status verbose
+
+✔️ Allow only required services
+sudo ufw allow ssh
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+
+✔️ Enable logging
+sudo ufw logging medium
+
+6️⃣ Remove Prohibited Software (Large Points)
+
+Remove anything hacking-related, games, P2P, etc.
+
+✔️ Remove hacking tools
+sudo apt purge wireshark nmap john hydra metasploit-framework aircrack-ng \
+tcpdump nikto sqlmap netcat -y
+
+✔️ Remove P2P & torrents
+sudo apt purge transmission* deluge* frostwire vuze -y
+
+✔️ Remove games
+sudo apt purge gnome-games* aisleriot gnome-mahjongg gnome-mines gnome-sudoku -y
+
+✔️ Clean up afterwards
+sudo apt autoremove -y
+sudo apt autoclean
+
+✔️ Search for prohibited media
+sudo find /home -name "*.mp3"
+sudo find /home -name "*.mp4"
+sudo find /home -name "*.avi"
+
+7️⃣ Service Management (HIGH POINTS)
+
+Disabling insecure/unneeded services earns many points.
+
+✔️ View running services
+sudo systemctl list-units --type=service --state=running
+
+✔️ Disable insecure services
+
+(Only if NOT required!)
+
+sudo systemctl disable --now telnet.socket
+sudo systemctl disable --now vsftpd
+sudo systemctl disable --now apache2
+sudo systemctl disable --now nginx
+sudo systemctl disable --now mysql
+sudo systemctl disable --now postgresql
+sudo systemctl disable --now smbd nmbd
+sudo systemctl disable --now cups
+sudo systemctl disable --now bluetooth
+sudo systemctl disable --now avahi-daemon
+
+⚠️ NEVER disable:
+
+ssh / sshd
+
+systemd services
+
+NetworkManager
+
+dbus
+
+Any service required by README
+
+🎯 MEDIUM-PRIORITY TASKS
+8️⃣ File Permissions & Security
+✔️ Find world-writable files
+sudo find / -type f -perm -002 -ls 2>/dev/null
+sudo chmod o-w <file>
+
+✔️ Secure /etc critical files
+sudo chmod 644 /etc/passwd /etc/group
+sudo chmod 640 /etc/shadow /etc/gshadow
+sudo chown root:root /etc/passwd
+sudo chown root:shadow /etc/shadow
+
+✔️ Check SUID/SGID files
+sudo find / -perm -4000 -type f -ls
+sudo find / -perm -2000 -type f -ls
+
+
+⚠️ Only remove SUID if you’re 100% sure.
+
+9️⃣ Network Security
+✔️ Disable IPv6 (if not needed)
+
+Edit:
+
+sudo nano /etc/sysctl.conf
+
 
 Add:
-```
-install usb-storage /bin/true
-```
 
-⚠️ **RISKY**: May be needed for competition!
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
 
-#### Check for Rootkits
-```bash
-# Install rkhunter
-sudo apt-get install rkhunter -y
 
-# Update database
+Apply:
+
+sudo sysctl -p
+
+✔️ Harden sysctl networking
+
+Add to /etc/sysctl.conf:
+
+net.ipv4.ip_forward = 0
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.tcp_syncookies = 1
+net.ipv4.conf.all.log_martians = 1
+
+
+Apply:
+
+sudo sysctl -p
+
+🔟 Audit & Logging
+✔️ Install auditd
+sudo apt install auditd audispd-plugins -y
+sudo systemctl enable auditd --now
+
+✔️ Add audit rules
+
+Edit:
+
+sudo nano /etc/audit/rules.d/audit.rules
+
+
+Add:
+
+-w /etc/passwd -p wa
+-w /etc/shadow -p wa
+-w /etc/sudoers -p wa
+-w /etc/ssh/sshd_config -p wa
+
+
+Apply:
+
+sudo augenrules --load
+
+🔽 LOWER-PRIORITY TASKS (Still give points)
+1️⃣1️⃣ AppArmor
+sudo apt install apparmor apparmor-utils -y
+sudo systemctl enable apparmor --now
+sudo aa-enforce /etc/apparmor.d/*
+
+1️⃣2️⃣ Rootkit Check
+sudo apt install rkhunter -y
 sudo rkhunter --update
-
-# Run scan
 sudo rkhunter --check --skip-keypress
-```
 
-#### Secure Shared Memory
-```bash
-# Edit fstab
-sudo nano /etc/fstab
-```
-
-Add this line:
-```
-tmpfs /run/shm tmpfs defaults,noexec,nosuid 0 0
-```
-
-Remount:
-```bash
-sudo mount -o remount /run/shm
-```
-
----
-
-## 🎯 Lower Priority Items (Still Worth Points)
-
-### 1️⃣1️⃣ Application-Specific Security
-
-#### Secure Apache (If Running)
-```bash
-# Edit Apache config
-sudo nano /etc/apache2/apache2.conf
-```
-
-Add/modify:
-```apache
-# Disable directory listing
-Options -Indexes
-
-# Hide Apache version
-ServerTokens Prod
-ServerSignature Off
-
-# Disable unnecessary modules
-sudo a2dismod status
-sudo a2dismod autoindex
-
-# Enable security modules
-sudo a2enmod headers
-sudo a2enmod ssl
-```
-
-Restart Apache:
-```bash
-sudo systemctl restart apache2
-```
-
-#### Secure MySQL/MariaDB (If Running)
-```bash
-# Run security script
-sudo mysql_secure_installation
-```
-
-Answer "Yes" to all prompts:
-- Set root password
-- Remove anonymous users
-- Disallow root login remotely
-- Remove test database
-- Reload privilege tables
-
-#### Secure PHP (If Running)
-```bash
-# Edit PHP configuration
-sudo nano /etc/php/7.4/apache2/php.ini # Adjust version numbe
+1️⃣3️⃣ Login & Warning Banners
+✔️ Pre-login banner
+sudo nano /etc/issue.net
 
 
+Add:
+
+UNAUTHORIZED ACCESS PROHIBITED.
+This system is monitored.
+
+1️⃣4️⃣ SSH Hardening (ONLY if SSH required)
+
+Edit:
+
+sudo nano /etc/ssh/sshd_config
+
+
+Recommended:
+
+PermitRootLogin no
+PermitEmptyPasswords no
+MaxAuthTries 3
+X11Forwarding no
+
+
+Reload:
+
+sudo systemctl restart sshd
