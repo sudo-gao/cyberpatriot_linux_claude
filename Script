@@ -1,0 +1,606 @@
+#!/bin/bash
+
+################################################################################
+# CyberPatriot Linux Security Hardening Script
+# 
+# WARNING: This script makes significant system changes!
+# - Take a VM snapshot BEFORE running
+# - Read the README first to know required users/services
+# - Answer forensics questions BEFORE running
+# - Review the script and comment out sections that might break requirements
+#
+# Usage: sudo bash cyberpatriot_hardening.sh
+################################################################################
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Check if running as root
+if [ "$EUID" -ne 0 ]; then 
+    echo -e "${RED}Please run as root (use sudo)${NC}"
+    exit 1
+fi
+
+# Log file
+LOGFILE="/root/cyberpatriot_hardening_$(date +%Y%m%d_%H%M%S).log"
+exec > >(tee -a "$LOGFILE")
+exec 2>&1
+
+echo -e "${BLUE}========================================${NC}"
+echo -e "${BLUE}CyberPatriot Linux Hardening Script${NC}"
+echo -e "${BLUE}========================================${NC}"
+echo ""
+echo -e "${YELLOW}Log file: $LOGFILE${NC}"
+echo ""
+
+# Pause function
+pause() {
+    echo -e "${YELLOW}Press ENTER to continue or Ctrl+C to abort${NC}"
+    read
+}
+
+################################################################################
+# SECTION 1: FORENSICS REMINDER
+################################################################################
+echo -e "${RED}========================================${NC}"
+echo -e "${RED}CRITICAL: FORENSICS QUESTIONS${NC}"
+echo -e "${RED}========================================${NC}"
+echo ""
+echo "Have you answered ALL forensics questions?"
+echo "Have you read the README completely?"
+echo "Have you taken a VM snapshot?"
+echo ""
+pause
+
+################################################################################
+# SECTION 2: SYSTEM INFORMATION
+################################################################################
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN}Gathering System Information${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo ""
+
+echo "Hostname: $(hostname)"
+echo "OS: $(lsb_release -d | cut -f2)"
+echo "Kernel: $(uname -r)"
+echo "Date: $(date)"
+echo ""
+
+################################################################################
+# SECTION 3: UPDATE SYSTEM
+################################################################################
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN}Section 1: System Updates${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo ""
+echo "This will update all packages. This may take 10-30 minutes."
+pause
+
+echo "Updating package lists..."
+apt-get update
+
+echo "Upgrading packages..."
+apt-get upgrade -y
+
+echo "Distribution upgrade..."
+apt-get dist-upgrade -y
+
+echo "Removing unnecessary packages..."
+apt-get autoremove -y
+apt-get autoclean
+
+echo "Installing unattended-upgrades..."
+apt-get install unattended-upgrades -y
+dpkg-reconfigure -plow unattended-upgrades
+
+echo -e "${GREEN}✓ Updates complete${NC}"
+echo ""
+
+################################################################################
+# SECTION 4: USER MANAGEMENT
+################################################################################
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN}Section 2: User Management${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo ""
+
+echo "Current users with UID >= 1000:"
+awk -F: '$3 >= 1000 {print $1 " (UID: " $3 ")"}' /etc/passwd
+echo ""
+
+echo "Current sudo group members:"
+getent group sudo
+echo ""
+
+echo -e "${YELLOW}Review users above. You'll need to manually remove unauthorized users.${NC}"
+echo "To remove a user: sudo userdel -r username"
+echo ""
+
+# Check for UID 0 accounts (only root should have this)
+echo "Checking for UID 0 accounts (only root should have UID 0)..."
+UID0_USERS=$(awk -F: '$3 == 0 && $1 != "root" {print $1}' /etc/passwd)
+if [ -n "$UID0_USERS" ]; then
+    echo -e "${RED}WARNING: Found UID 0 accounts besides root:${NC}"
+    echo "$UID0_USERS"
+    echo -e "${RED}These are BACKDOOR ACCOUNTS and should be deleted!${NC}"
+else
+    echo -e "${GREEN}✓ No backdoor UID 0 accounts found${NC}"
+fi
+echo ""
+
+# Disable root login
+echo "Locking root account..."
+passwd -l root
+echo -e "${GREEN}✓ Root account locked${NC}"
+echo ""
+
+# Disable guest account (Lightdm)
+if [ -d /etc/lightdm ]; then
+    echo "Disabling guest account..."
+    mkdir -p /etc/lightdm/lightdm.conf.d
+    cat > /etc/lightdm/lightdm.conf.d/50-no-guest.conf << 'EOF'
+[Seat:*]
+allow-guest=false
+EOF
+    echo -e "${GREEN}✓ Guest account disabled${NC}"
+else
+    echo "Lightdm not found, skipping guest disable"
+fi
+echo ""
+
+################################################################################
+# SECTION 5: PASSWORD POLICIES
+################################################################################
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN}Section 3: Password Policies${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo ""
+
+# Install password quality library
+echo "Installing libpam-pwquality..."
+apt-get install libpam-pwquality -y
+
+# Configure password complexity
+echo "Configuring password complexity..."
+if ! grep -q "pam_pwquality.so" /etc/pam.d/common-password; then
+    # Add if not exists
+    sed -i '/pam_unix.so/i password requisite pam_pwquality.so retry=3 minlen=8 difok=3 ucredit=-1 lcredit=-1 dcredit=-1 ocredit=-1 maxrepeat=2 gecoscheck' /etc/pam.d/common-password
+else
+    # Update existing line
+    sed -i 's/^password.*pam_pwquality.so.*/password requisite pam_pwquality.so retry=3 minlen=8 difok=3 ucredit=-1 lcredit=-1 dcredit=-1 ocredit=-1 maxrepeat=2 gecoscheck/' /etc/pam.d/common-password
+fi
+
+# Configure account lockout
+echo "Configuring account lockout..."
+if [ -f /etc/security/faillock.conf ]; then
+    # Ubuntu 20.04+
+    sed -i 's/^# deny =.*/deny = 5/' /etc/security/faillock.conf
+    sed -i 's/^# unlock_time =.*/unlock_time = 1800/' /etc/security/faillock.conf
+    
+    # Ensure faillock is in PAM
+    if ! grep -q "pam_faillock.so" /etc/pam.d/common-auth; then
+        sed -i '/pam_unix.so/i auth required pam_faillock.so preauth' /etc/pam.d/common-auth
+        sed -i '/pam_unix.so/a auth required pam_faillock.so authfail' /etc/pam.d/common-auth
+    fi
+else
+    # Ubuntu 18.04 and earlier - use pam_tally2
+    if ! grep -q "pam_tally2.so" /etc/pam.d/common-auth; then
+        sed -i '/pam_unix.so/i auth required pam_tally2.so deny=5 unlock_time=1800 onerr=fail' /etc/pam.d/common-auth
+    fi
+fi
+
+# Configure password aging in login.defs
+echo "Configuring password aging..."
+sed -i 's/^PASS_MAX_DAYS.*/PASS_MAX_DAYS   90/' /etc/login.defs
+sed -i 's/^PASS_MIN_DAYS.*/PASS_MIN_DAYS   1/' /etc/login.defs
+sed -i 's/^PASS_WARN_AGE.*/PASS_WARN_AGE   7/' /etc/login.defs
+sed -i 's/^PASS_MIN_LEN.*/PASS_MIN_LEN    8/' /etc/login.defs
+
+# Apply password aging to existing users
+echo "Applying password aging to all users..."
+for user in $(awk -F: '$3 >= 1000 && $7 != "/usr/sbin/nologin" && $7 != "/bin/false" {print $1}' /etc/passwd); do
+    chage -M 90 -m 1 -W 7 "$user"
+    echo "  Updated $user"
+done
+
+echo -e "${GREEN}✓ Password policies configured${NC}"
+echo ""
+
+################################################################################
+# SECTION 6: FIREWALL
+################################################################################
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN}Section 4: Firewall Configuration${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo ""
+
+echo "Installing and configuring UFW..."
+apt-get install ufw -y
+
+# Set default policies
+ufw default deny incoming
+ufw default allow outgoing
+
+# Enable logging
+ufw logging on
+
+echo -e "${YELLOW}About to enable UFW. This may disconnect SSH if you're remote!${NC}"
+echo "Make sure SSH is allowed first if needed."
+echo ""
+echo "Do you need to allow SSH? (y/n)"
+read -r ALLOW_SSH
+if [ "$ALLOW_SSH" = "y" ]; then
+    echo "Allowing SSH..."
+    ufw allow ssh
+fi
+
+# Enable firewall
+echo "Enabling UFW..."
+yes | ufw enable
+
+echo -e "${GREEN}✓ Firewall configured and enabled${NC}"
+echo ""
+
+################################################################################
+# SECTION 7: REMOVE PROHIBITED SOFTWARE
+################################################################################
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN}Section 5: Remove Prohibited Software${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo ""
+
+echo "Searching for and removing hacking tools..."
+
+# Array of prohibited packages
+PROHIBITED_PACKAGES=(
+    "wireshark"
+    "wireshark-common"
+    "nmap"
+    "zenmap"
+    "john"
+    "john-data"
+    "ophcrack"
+    "hydra"
+    "hydra-gtk"
+    "aircrack-ng"
+    "netcat"
+    "netcat-traditional"
+    "nc"
+    "nikto"
+    "sqlmap"
+    "tcpdump"
+    "ettercap"
+    "ettercap-graphical"
+    "kismet"
+    "metasploit"
+    "metasploit-framework"
+    "burpsuite"
+    "beef-xss"
+    "sslstrip"
+)
+
+for package in "${PROHIBITED_PACKAGES[@]}"; do
+    if dpkg -l | grep -q "^ii  $package"; then
+        echo "Removing $package..."
+        apt-get purge "$package" -y
+    fi
+done
+
+# Remove games
+echo "Removing games..."
+apt-get purge gnome-games gnome-games-data -y 2>/dev/null
+apt-get purge aisleriot gnome-mahjongg gnome-mines gnome-sudoku -y 2>/dev/null
+
+# Clean up
+apt-get autoremove -y
+
+echo -e "${GREEN}✓ Prohibited software removed${NC}"
+echo ""
+
+################################################################################
+# SECTION 8: FIND PROHIBITED FILES
+################################################################################
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN}Section 6: Find Prohibited Media Files${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo ""
+
+echo "Searching for media files (this may take a while)..."
+MEDIA_FILES=$(find /home -type f \( -iname "*.mp3" -o -iname "*.mp4" -o -iname "*.avi" -o -iname "*.mkv" -o -iname "*.flv" -o -iname "*.wmv" -o -iname "*.wav" -o -iname "*.flac" \) 2>/dev/null)
+
+if [ -n "$MEDIA_FILES" ]; then
+    echo -e "${YELLOW}Found media files:${NC}"
+    echo "$MEDIA_FILES"
+    echo ""
+    echo "Do you want to DELETE ALL these files? (yes/no)"
+    echo -e "${RED}Type 'yes' to confirm deletion:${NC}"
+    read -r CONFIRM_DELETE
+    if [ "$CONFIRM_DELETE" = "yes" ]; then
+        echo "$MEDIA_FILES" | while read -r file; do
+            rm -f "$file"
+            echo "Deleted: $file"
+        done
+        echo -e "${GREEN}✓ Media files deleted${NC}"
+    else
+        echo "Skipping media file deletion"
+    fi
+else
+    echo -e "${GREEN}✓ No media files found${NC}"
+fi
+echo ""
+
+################################################################################
+# SECTION 9: SECURE SSH
+################################################################################
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN}Section 7: SSH Hardening${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo ""
+
+if [ -f /etc/ssh/sshd_config ]; then
+    echo "Backing up sshd_config..."
+    cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup
+    
+    echo "Hardening SSH configuration..."
+    
+    # Function to set or update SSH config
+    set_ssh_config() {
+        local param=$1
+        local value=$2
+        if grep -q "^${param}" /etc/ssh/sshd_config; then
+            sed -i "s/^${param}.*/${param} ${value}/" /etc/ssh/sshd_config
+        else
+            echo "${param} ${value}" >> /etc/ssh/sshd_config
+        fi
+    }
+    
+    set_ssh_config "PermitRootLogin" "no"
+    set_ssh_config "PermitEmptyPasswords" "no"
+    set_ssh_config "X11Forwarding" "no"
+    set_ssh_config "MaxAuthTries" "3"
+    set_ssh_config "ClientAliveInterval" "300"
+    set_ssh_config "ClientAliveCountMax" "0"
+    set_ssh_config "LoginGraceTime" "60"
+    set_ssh_config "Protocol" "2"
+    set_ssh_config "IgnoreRhosts" "yes"
+    set_ssh_config "HostbasedAuthentication" "no"
+    set_ssh_config "PasswordAuthentication" "yes"
+    set_ssh_config "UsePAM" "yes"
+    
+    # Test configuration
+    echo "Testing SSH configuration..."
+    if sshd -t; then
+        echo "Restarting SSH service..."
+        systemctl restart sshd
+        echo -e "${GREEN}✓ SSH hardened${NC}"
+    else
+        echo -e "${RED}ERROR: SSH configuration test failed!${NC}"
+        echo "Restoring backup..."
+        cp /etc/ssh/sshd_config.backup /etc/ssh/sshd_config
+    fi
+else
+    echo "SSH not installed, skipping"
+fi
+echo ""
+
+################################################################################
+# SECTION 10: KERNEL PARAMETERS
+################################################################################
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN}Section 8: Kernel Security Parameters${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo ""
+
+echo "Configuring kernel security parameters..."
+
+# Backup sysctl.conf
+cp /etc/sysctl.conf /etc/sysctl.conf.backup
+
+# Add security parameters
+cat >> /etc/sysctl.conf << 'EOF'
+
+# CyberPatriot Security Parameters
+# IP Forwarding
+net.ipv4.ip_forward = 0
+
+# Disable source packet routing
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
+
+# Disable ICMP redirects
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.all.secure_redirects = 0
+net.ipv4.conf.default.secure_redirects = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+
+# Enable bad error message protection
+net.ipv4.icmp_echo_ignore_broadcasts = 1
+net.ipv4.icmp_ignore_bogus_error_responses = 1
+
+# Enable TCP SYN cookies
+net.ipv4.tcp_syncookies = 1
+
+# Log suspicious packets
+net.ipv4.conf.all.log_martians = 1
+net.ipv4.conf.default.log_martians = 1
+
+# Enable reverse path filtering
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
+
+# IPv6 settings
+net.ipv6.conf.all.accept_redirects = 0
+net.ipv6.conf.default.accept_redirects = 0
+net.ipv6.conf.all.accept_source_route = 0
+net.ipv6.conf.default.accept_source_route = 0
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+EOF
+
+# Apply settings
+sysctl -p
+
+echo -e "${GREEN}✓ Kernel parameters configured${NC}"
+echo ""
+
+################################################################################
+# SECTION 11: FILE PERMISSIONS
+################################################################################
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN}Section 9: File Permissions${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo ""
+
+echo "Securing critical file permissions..."
+
+# Secure passwd/shadow files
+chmod 644 /etc/passwd
+chmod 640 /etc/shadow
+chmod 644 /etc/group
+chmod 640 /etc/gshadow
+chown root:root /etc/passwd
+chown root:shadow /etc/shadow
+chown root:root /etc/group
+chown root:shadow /etc/gshadow
+
+# Secure sudoers
+chmod 440 /etc/sudoers
+chown root:root /etc/sudoers
+
+# Secure SSH keys for all users
+for user_home in /home/*; do
+    if [ -d "$user_home/.ssh" ]; then
+        username=$(basename "$user_home")
+        chmod 700 "$user_home/.ssh"
+        if [ -f "$user_home/.ssh/authorized_keys" ]; then
+            chmod 600 "$user_home/.ssh/authorized_keys"
+        fi
+        chown -R "$username:$username" "$user_home/.ssh"
+    fi
+done
+
+echo -e "${GREEN}✓ File permissions secured${NC}"
+echo ""
+
+################################################################################
+# SECTION 12: CHECK HOSTS FILE
+################################################################################
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN}Section 10: Hosts File${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo ""
+
+echo "Checking /etc/hosts for malicious entries..."
+echo "Current /etc/hosts:"
+cat /etc/hosts
+echo ""
+
+# Count non-localhost entries
+SUSPICIOUS_ENTRIES=$(grep -v "^#" /etc/hosts | grep -v "^$" | grep -v "127.0.0.1" | grep -v "127.0.1.1" | grep -v "::1" | wc -l)
+
+if [ "$SUSPICIOUS_ENTRIES" -gt 0 ]; then
+    echo -e "${YELLOW}WARNING: Found $SUSPICIOUS_ENTRIES potentially suspicious hosts entries${NC}"
+    echo "Review /etc/hosts manually and remove unauthorized entries"
+else
+    echo -e "${GREEN}✓ Hosts file looks clean${NC}"
+fi
+echo ""
+
+################################################################################
+# SECTION 13: DISABLE CTRL+ALT+DEL
+################################################################################
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN}Section 11: Disable Ctrl+Alt+Del Reboot${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo ""
+
+echo "Disabling Ctrl+Alt+Del reboot..."
+systemctl mask ctrl-alt-del.target
+echo -e "${GREEN}✓ Ctrl+Alt+Del reboot disabled${NC}"
+echo ""
+
+################################################################################
+# SECTION 14: REMOVE RHOSTS FILES
+################################################################################
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN}Section 12: Remove .rhosts Files${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo ""
+
+echo "Searching for and removing .rhosts and .shosts files..."
+find /home -name .rhosts -delete 2>/dev/null
+find /home -name .shosts -delete 2>/dev/null
+rm -f /etc/hosts.equiv 2>/dev/null
+rm -f /etc/shosts.equiv 2>/dev/null
+echo -e "${GREEN}✓ .rhosts files removed${NC}"
+echo ""
+
+################################################################################
+# SECTION 15: APPARMOR
+################################################################################
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN}Section 13: AppArmor${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo ""
+
+echo "Installing and enabling AppArmor..."
+apt-get install apparmor apparmor-utils -y
+systemctl enable apparmor
+systemctl start apparmor
+
+# Put profiles in enforce mode
+aa-enforce /etc/apparmor.d/* 2>/dev/null
+
+echo -e "${GREEN}✓ AppArmor enabled${NC}"
+echo ""
+
+################################################################################
+# SECTION 16: AUDITD
+################################################################################
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN}Section 14: Audit Logging${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo ""
+
+echo "Installing and configuring auditd..."
+apt-get install auditd audispd-plugins -y
+
+# Add audit rules
+cat > /etc/audit/rules.d/cyberpatriot.rules << 'EOF'
+# CyberPatriot Audit Rules
+-w /etc/passwd -p wa -k passwd_changes
+-w /etc/group -p wa -k group_changes
+-w /etc/shadow -p wa -k shadow_changes
+-w /etc/sudoers -p wa -k sudoers_changes
+-w /etc/sudoers.d/ -p wa -k sudoers_changes
+-w /var/log/auth.log -p wa -k auth_log
+-w /var/log/sudo.log -p wa -k sudo_log
+EOF
+
+# Reload rules
+augenrules --load
+systemctl enable auditd
+systemctl restart auditd
+
+echo -e "${GREEN}✓ Auditd configured${NC}"
+echo ""
+
+################################################################################
+# SECTION 17: DISABLE USB STORAGE
+################################################################################
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN}Section 15: Disable USB Storage (Optional)${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo ""
+
+echo "Do you want to disable USB storage? This may be needed for competition. (y/n)"
+read -r DISABLE_USB
+if [ "$DISABLE_USB" = "y" ]; then
+    echo "Disabling USB storage..."
+    ca
